@@ -162,7 +162,7 @@ function M.start()
 
   -- Initialize rendering
   render.init(bufnr, M.config)
-  render.gray_range(bufnr, range, idx_to_pos, 1, #target)
+  render.gray_range(bufnr, range, idx_to_pos, 1, #target, M.config)
 
   -- Run the session
   local result = session.run(M.state, M.config, render)

@@ -3,6 +3,10 @@
 
 local M = {}
 
+local function tc(keys)
+  return vim.api.nvim_replace_termcodes(keys, true, false, true)
+end
+
 --- Run a typing session
 ---@param state table Plugin state { bufnr, range, target, idx_to_pos, saved_view }
 ---@param config table Plugin configuration
@@ -16,14 +20,20 @@ function M.run(state, config, render)
 
   -- Session state
   local current_idx = 1  -- 1-indexed position in target
-  local typed_count = 0
-  local correct_count = 0
-  local wrong_indices = {}  -- Set of indices that were typed incorrectly
+  local keystrokes = 0      -- counts printable keypresses (does NOT decrement on backspace)
+  local correct_count = 0   -- current correct characters in the buffer positions (can decrease on backspace)
+  local typed_state = {}    -- typed_state[i] = true if correct, false if incorrect (for backspace accounting)
+  local wrong_indices = {}  -- Set of indices currently wrong (for red overlay)
   local started_at = nil
   local ended_at = nil
 
+  local KEY_ESC = tc('<Esc>')
+  local KEY_BS = tc('<BS>')
+  local KEY_DEL = tc('<Del>')
+
   -- Render initial state with caret
   render.update(bufnr, range, idx_to_pos, current_idx, #target, wrong_indices, config)
+  render.move_cursor_to_idx(bufnr, idx_to_pos, current_idx)
 
   -- Main input loop
   while current_idx <= #target do
@@ -38,15 +48,29 @@ function M.run(state, config, render)
     end
 
     -- Handle special keys
-    if char == '\27' then  -- Escape
+    if char == KEY_ESC or char == '\27' then  -- Escape
       return nil
-    elseif char == '\8' or char == '\127' then  -- Backspace (BS or DEL)
+    elseif char == KEY_BS or char == KEY_DEL or char == '\8' or char == '\127' or char == '\b' then  -- Backspace/Delete
       if current_idx > 1 then
-        current_idx = current_idx - 1
-        -- Remove from wrong set if it was there
-        wrong_indices[current_idx] = nil
+        local prev_idx = current_idx - 1
+
+        -- Undo correctness accounting for the character we're removing
+        local prev_state = typed_state[prev_idx]
+        if prev_state ~= nil then
+          if prev_state == true then
+            correct_count = math.max(0, correct_count - 1)
+          end
+          typed_state[prev_idx] = nil
+        end
+
+        -- Remove wrong overlay for that index (it becomes untyped again)
+        wrong_indices[prev_idx] = nil
+
+        current_idx = prev_idx
+
         -- Update display
         render.update(bufnr, range, idx_to_pos, current_idx, #target, wrong_indices, config)
+        render.move_cursor_to_idx(bufnr, idx_to_pos, current_idx)
       end
     elseif #char == 1 and char:byte() >= 32 then  -- Printable character
       -- Start timer on first character
@@ -58,11 +82,14 @@ function M.run(state, config, render)
       local expected = target:sub(current_idx, current_idx)
 
       -- Check correctness
-      typed_count = typed_count + 1
+      keystrokes = keystrokes + 1
       if char == expected then
         correct_count = correct_count + 1
+        typed_state[current_idx] = true
+        wrong_indices[current_idx] = nil
       else
         wrong_indices[current_idx] = true
+        typed_state[current_idx] = false
       end
 
       -- Advance
@@ -71,6 +98,7 @@ function M.run(state, config, render)
       -- Update display
       if current_idx <= #target then
         render.update(bufnr, range, idx_to_pos, current_idx, #target, wrong_indices, config)
+        render.move_cursor_to_idx(bufnr, idx_to_pos, current_idx)
       end
     end
     -- Ignore other keys (arrows, function keys, etc.)
@@ -89,23 +117,20 @@ function M.run(state, config, render)
   local minutes = duration_s / 60
 
   -- WPM calculations (standard: 5 chars = 1 word)
-  local raw_wpm = (typed_count / 5) / minutes
+  local raw_wpm = (keystrokes / 5) / minutes
   local net_wpm = (correct_count / 5) / minutes
 
   -- Accuracy
-  local accuracy = 0
-  if typed_count > 0 then
-    accuracy = (correct_count / typed_count) * 100
-  end
+  local accuracy = (correct_count / #target) * 100
 
   -- Clear the gray/wrong overlays, keep for results display
   render.clear_overlays(bufnr)
 
   return {
     duration_s = duration_s,
-    typed_count = typed_count,
+    typed_count = keystrokes,
     correct_count = correct_count,
-    wrong_count = typed_count - correct_count,
+    wrong_count = #target - correct_count,
     raw_wpm = raw_wpm,
     net_wpm = net_wpm,
     accuracy = accuracy,

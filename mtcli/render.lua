@@ -22,7 +22,8 @@ end
 ---@param idx_to_pos table Mapping from char index to buffer position
 ---@param from_idx number Start index (1-indexed)
 ---@param to_idx number End index (1-indexed, inclusive)
-function M.gray_range(bufnr, range, idx_to_pos, from_idx, to_idx)
+---@param config table Plugin configuration
+function M.gray_range(bufnr, range, idx_to_pos, from_idx, to_idx, config)
   -- Clear any existing marks first
   vim.api.nvim_buf_clear_namespace(bufnr, M.ns, range.start_row, range.end_row + 1)
 
@@ -30,7 +31,7 @@ function M.gray_range(bufnr, range, idx_to_pos, from_idx, to_idx)
   for i = from_idx, to_idx do
     local pos = idx_to_pos[i]
     if pos then
-      M.set_char_highlight(bufnr, pos.row, pos.col, 'MtcliGray')
+      M.set_char_highlight(bufnr, pos.row, pos.col, config.hl_gray)
     end
   end
 end
@@ -119,6 +120,24 @@ end
 ---@param bufnr number Buffer number
 function M.clear_overlays(bufnr)
   vim.api.nvim_buf_clear_namespace(bufnr, M.ns, 0, -1)
+end
+
+--- Move the real Neovim cursor to the current target index
+---@param bufnr number Buffer number
+---@param idx_to_pos table Mapping from char index to buffer position
+---@param idx number Current index (1-indexed)
+function M.move_cursor_to_idx(bufnr, idx_to_pos, idx)
+  if vim.api.nvim_get_current_buf() ~= bufnr then
+    return
+  end
+
+  local pos = idx_to_pos[idx]
+  if not pos then
+    return
+  end
+
+  -- Neovim cursor is 1-indexed row, 0-indexed col
+  pcall(vim.api.nvim_win_set_cursor, 0, { pos.row + 1, pos.col })
 end
 
 --- Full cleanup - clear all extmarks
