@@ -1,79 +1,105 @@
 -- mtcli.nvim - Tree-sitter utilities
--- Find function node under cursor
+-- Chunk selection helpers
 
 local M = {}
 
---- Get the list of function node types for the current filetype
----@param config table Plugin configuration
----@return string[] List of node type names
-function M.get_function_types(config)
-  local ft = vim.bo.filetype
-
-  -- Check for filetype-specific config
-  if config.node_types[ft] then
-    return config.node_types[ft]
-  end
-
-  -- Fall back to defaults
-  return config.node_types.default or {}
+--- Get indent column (0-indexed) for a given line
+---@param line string
+---@return number
+local function indent_col(line)
+  local _, ws = line:find('^%s*')
+  return ws or 0
 end
 
---- Check if a node type is a function type
----@param node_type string The node type to check
----@param function_types string[] List of function type names
----@return boolean
-function M.is_function_type(node_type, function_types)
-  for _, ft in ipairs(function_types) do
-    if node_type == ft then
-      return true
-    end
-  end
-  return false
+--- Return a single-line range for the current cursor row
+---@param bufnr number
+---@param row number 0-indexed
+---@return table
+local function line_range(bufnr, row)
+  local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ''
+  return {
+    start_row = row,
+    start_col = 0,
+    end_row = row,
+    end_col = #line,
+  }
 end
 
---- Find the function node containing the cursor
----@param bufnr number Buffer number
----@param config table Plugin configuration
----@return table|nil Range table { start_row, start_col, end_row, end_col } (0-indexed)
-function M.get_function_range(bufnr, config)
-  -- Get cursor position (1-indexed)
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  local row = cursor[1] - 1  -- Convert to 0-indexed
-  local col = cursor[2]
+--- Find the smallest multiline Tree-sitter node that starts at the cursor line.
+--- We prefer nodes that start at the line's indentation column, so `if ...` selects
+--- the `if` block and not an inner expression node.
+---@param bufnr number
+---@param row number 0-indexed cursor row
+---@param col number 0-indexed cursor col
+---@return table|nil
+local function smallest_multiline_node_starting_on_line(bufnr, row, col)
+  local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ''
+  local want_col = indent_col(line)
 
-  -- Get the node at cursor
   local node = vim.treesitter.get_node({
     bufnr = bufnr,
     pos = { row, col },
   })
-
   if not node then
     return nil
   end
 
-  -- Get function types for this filetype
-  local function_types = M.get_function_types(config)
-
-  -- Walk up the tree to find a function node
+  local fallback = nil
   local current = node
   while current do
-    local node_type = current:type()
-
-    if M.is_function_type(node_type, function_types) then
-      -- Found a function node, get its range
-      local start_row, start_col, end_row, end_col = current:range()
-      return {
-        start_row = start_row,
-        start_col = start_col,
-        end_row = end_row,
-        end_col = end_col,
-      }
+    local sr, sc, er, ec = current:range()
+    if sr == row and er > row then
+      local r = { start_row = sr, start_col = sc, end_row = er, end_col = ec }
+      -- Prefer nodes that begin at indentation
+      if sc == want_col then
+        return r
+      end
+      if not fallback then
+        fallback = r
+      end
     end
-
     current = current:parent()
   end
 
-  return nil
+  return fallback
+end
+
+--- Get the chunk range under cursor using the requested logic:
+--- - If the cursor line begins a multiline construct (block/list/call split across lines), test that chunk.
+--- - Otherwise, test only the current line.
+---@param bufnr number
+---@return table|nil Range { start_row, start_col, end_row, end_col } (0-indexed, end exclusive)
+function M.get_chunk_range(bufnr)
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row = cursor[1] - 1
+  local col = cursor[2]
+
+  local multiline = smallest_multiline_node_starting_on_line(bufnr, row, col)
+  if multiline then
+    return multiline
+  end
+
+  return line_range(bufnr, row)
+end
+
+--- Get a range covering the entire buffer
+---@param bufnr number
+---@return table
+function M.get_buffer_range(bufnr)
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  if line_count == 0 then
+    return { start_row = 0, start_col = 0, end_row = 0, end_col = 0 }
+  end
+
+  local last_row = line_count - 1
+  local last_line = vim.api.nvim_buf_get_lines(bufnr, last_row, last_row + 1, false)[1] or ''
+
+  return {
+    start_row = 0,
+    start_col = 0,
+    end_row = last_row,
+    end_col = #last_line,
+  }
 end
 
 --- Get the text content of a range

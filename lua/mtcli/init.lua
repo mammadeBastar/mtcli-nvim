@@ -7,6 +7,8 @@ local M = {}
 M.config = {
   -- Keymap to trigger typing test (set to false to disable)
   keymap = '<leader>mt',
+  -- Keymap to trigger typing test on the whole buffer (set to false to disable)
+  keymap_page = '<leader>mp',
 
   -- Node types to treat as "function" per filetype
   -- Keys are filetypes, values are lists of Tree-sitter node types
@@ -93,22 +95,32 @@ function M.setup(opts)
   vim.api.nvim_set_hl(0, 'MtcliWrong', { fg = '#ff6b6b', bold = true, default = true })
   vim.api.nvim_set_hl(0, 'MtcliCaret', { reverse = true, default = true })
 
-  -- Create user command
+  -- Create user commands (force=true so setup can be called even if a loader created them)
   vim.api.nvim_create_user_command('MtType', function()
     M.start()
-  end, { desc = 'Start typing test on function under cursor' })
+  end, { desc = 'Start typing test on chunk under cursor', force = true })
+
+  vim.api.nvim_create_user_command('MtTypePage', function()
+    M.start_page()
+  end, { desc = 'Start typing test on entire buffer', force = true })
 
   -- Set up keymap if configured
   if M.config.keymap then
     vim.keymap.set('n', M.config.keymap, ':MtType<CR>', {
-      desc = 'Typing test: function under cursor',
+      desc = 'Typing test: chunk under cursor',
+      silent = true,
+    })
+  end
+
+  if M.config.keymap_page then
+    vim.keymap.set('n', M.config.keymap_page, ':MtTypePage<CR>', {
+      desc = 'Typing test: entire buffer',
       silent = true,
     })
   end
 end
 
--- Start the typing test
-function M.start()
+local function start_with_range(range, opts)
   local ts = require('mtcli.ts')
   local normalize = require('mtcli.normalize')
   local session = require('mtcli.session')
@@ -125,24 +137,23 @@ function M.start()
     return
   end
 
-  -- Get function range under cursor
-  local range = ts.get_function_range(bufnr, M.config)
   if not range then
-    vim.notify('mtcli: No function found under cursor', vim.log.levels.WARN)
+    vim.notify('mtcli: No chunk found under cursor', vim.log.levels.WARN)
     return
   end
 
   -- Extract and normalize text
   local target, idx_to_pos = normalize.normalize_range(bufnr, range)
   if not target or #target == 0 then
-    vim.notify('mtcli: Function is empty', vim.log.levels.WARN)
+    vim.notify('mtcli: Chunk is empty', vim.log.levels.WARN)
     return
   end
 
   -- Check max chars
-  if M.config.max_chars > 0 and #target > M.config.max_chars then
+  local ignore_max = opts and opts.ignore_max_chars
+  if not ignore_max and M.config.max_chars > 0 and #target > M.config.max_chars then
     vim.notify(
-      string.format('mtcli: Function too large (%d chars, max %d)', #target, M.config.max_chars),
+      string.format('mtcli: Chunk too large (%d chars, max %d)', #target, M.config.max_chars),
       vim.log.levels.WARN
     )
     return
@@ -177,6 +188,22 @@ function M.start()
   end
 
   M.state = nil
+end
+
+-- Start the typing test (chunk under cursor)
+function M.start()
+  local ts = require('mtcli.ts')
+  local bufnr = vim.api.nvim_get_current_buf()
+  local range = ts.get_chunk_range(bufnr)
+  start_with_range(range, { ignore_max_chars = false })
+end
+
+-- Start the typing test (entire buffer)
+function M.start_page()
+  local ts = require('mtcli.ts')
+  local bufnr = vim.api.nvim_get_current_buf()
+  local range = ts.get_buffer_range(bufnr)
+  start_with_range(range, { ignore_max_chars = true })
 end
 
 -- Cleanup function (called by ui module)
