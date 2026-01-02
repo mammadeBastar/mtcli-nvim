@@ -30,6 +30,8 @@ function M.run(state, config, render)
   local KEY_ESC = tc('<Esc>')
   local KEY_BS = tc('<BS>')
   local KEY_DEL = tc('<Del>')
+  local KEY_CR = tc('<CR>')
+  local KEY_TAB = tc('<Tab>')
 
   -- Render initial state with caret
   render.update(bufnr, range, idx_to_pos, current_idx, #target, wrong_indices, config)
@@ -72,33 +74,42 @@ function M.run(state, config, render)
         render.update(bufnr, range, idx_to_pos, current_idx, #target, wrong_indices, config)
         render.move_cursor_to_idx(bufnr, idx_to_pos, current_idx)
       end
-    elseif #char == 1 and char:byte() >= 32 then  -- Printable character
-      -- Start timer on first character
-      if not started_at then
-        started_at = vim.loop.hrtime()
-      end
-
-      -- Get expected character
+    else
+      -- Allow natural \"line end\" keys to type a normalized space.
+      -- When the target expects a single space (representing any whitespace/newline),
+      -- treat Enter/Tab as typing that space.
       local expected = target:sub(current_idx, current_idx)
-
-      -- Check correctness
-      keystrokes = keystrokes + 1
-      if char == expected then
-        correct_count = correct_count + 1
-        typed_state[current_idx] = true
-        wrong_indices[current_idx] = nil
-      else
-        wrong_indices[current_idx] = true
-        typed_state[current_idx] = false
+      if expected == ' ' then
+        if char == KEY_CR or char == '\r' or char == '\n' or char == KEY_TAB then
+          char = ' '
+        end
       end
 
-      -- Advance
-      current_idx = current_idx + 1
+      if #char == 1 and char:byte() >= 32 then  -- Printable character (including space)
+        -- Start timer on first character
+        if not started_at then
+          started_at = vim.loop.hrtime()
+        end
 
-      -- Update display
-      if current_idx <= #target then
-        render.update(bufnr, range, idx_to_pos, current_idx, #target, wrong_indices, config)
-        render.move_cursor_to_idx(bufnr, idx_to_pos, current_idx)
+        -- Check correctness
+        keystrokes = keystrokes + 1
+        if char == expected then
+          correct_count = correct_count + 1
+          typed_state[current_idx] = true
+          wrong_indices[current_idx] = nil
+        else
+          wrong_indices[current_idx] = true
+          typed_state[current_idx] = false
+        end
+
+        -- Advance
+        current_idx = current_idx + 1
+
+        -- Update display
+        if current_idx <= #target then
+          render.update(bufnr, range, idx_to_pos, current_idx, #target, wrong_indices, config)
+          render.move_cursor_to_idx(bufnr, idx_to_pos, current_idx)
+        end
       end
     end
     -- Ignore other keys (arrows, function keys, etc.)
